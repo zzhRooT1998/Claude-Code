@@ -25,6 +25,8 @@ bun run version   # 验证版本
 
 通过阅读还原后的 1,987 个 TypeScript 源文件，我们发现了大量未公开的隐藏功能。这些功能通过**编译开关**（`feature()`）和**用户类型**（`USER_TYPE`）进行门控，外部发布版中大部分被裁剪。
 
+> 如果你想先建立整体代码地图，建议从 [架构总览](docs/00-architecture.md) 开始；如果 VS Code Mermaid 预览不稳定，也可以直接用浏览器打开 [HTML 版架构图](docs/architecture.html)。
+
 ---
 
 ### 1. [BUDDY — AI 电子宠物](docs/01-buddy.md)

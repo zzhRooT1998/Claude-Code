@@ -1,0 +1,449 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Claude Code 架构总览</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f7f7f8;
+        --fg: #1f2328;
+        --muted: #667085;
+        --card: #ffffff;
+        --border: #d0d7de;
+        --accent: #8250df;
+        --code: #f6f8fa;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #0d1117;
+          --fg: #e6edf3;
+          --muted: #8b949e;
+          --card: #161b22;
+          --border: #30363d;
+          --accent: #d2a8ff;
+          --code: #21262d;
+        }
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--fg);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial,
+          "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+        line-height: 1.65;
+      }
+
+      main {
+        max-width: 1180px;
+        margin: 0 auto;
+        padding: 40px 24px 80px;
+      }
+
+      h1,
+      h2,
+      h3 {
+        line-height: 1.25;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 36px;
+      }
+
+      h2 {
+        margin-top: 48px;
+        padding-top: 8px;
+        border-top: 1px solid var(--border);
+        font-size: 26px;
+      }
+
+      h3 {
+        margin-top: 28px;
+        font-size: 20px;
+      }
+
+      p.lead {
+        margin-top: 0;
+        color: var(--muted);
+        font-size: 17px;
+      }
+
+      code {
+        padding: 0.16em 0.32em;
+        border-radius: 5px;
+        background: var(--code);
+        font-family: ui-monospace, SFMono-Regular, SFMono, Menlo, Consolas,
+          "Liberation Mono", monospace;
+        font-size: 0.92em;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        margin: 16px 0;
+        overflow: hidden;
+        border-radius: 10px;
+      }
+
+      th,
+      td {
+        padding: 10px 12px;
+        border: 1px solid var(--border);
+        vertical-align: top;
+      }
+
+      th {
+        text-align: left;
+        background: color-mix(in srgb, var(--card) 70%, var(--accent) 8%);
+      }
+
+      .card {
+        margin: 18px 0;
+        padding: 18px;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        background: var(--card);
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+      }
+
+      .diagram {
+        overflow-x: auto;
+      }
+
+      .diagram .mermaid {
+        min-width: 720px;
+      }
+
+      .toc {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 8px 18px;
+        padding-left: 18px;
+      }
+
+      a {
+        color: var(--accent);
+      }
+
+      .note {
+        border-left: 4px solid var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Claude Code 架构总览</h1>
+      <p class="lead">
+        这份 HTML 版用于绕过 VS Code Mermaid 预览不稳定的问题，可直接用浏览器打开。
+      </p>
+
+      <div class="card note">
+        <strong>一句话架构：</strong>
+        这是一个 <code>Bun + TypeScript + React Ink</code> 的终端 Agent 应用：
+        <code>src/main.tsx</code> 负责 CLI 启动和模式分发，交互式 TUI 由
+        <code>src/components/</code> 与 <code>src/hooks/</code> 驱动，模型对话主循环在
+        <code>src/query.ts</code>，工具系统由 <code>src/Tool.ts</code>、<code>src/tools.ts</code>、
+        <code>src/tools/</code>、<code>src/services/tools/</code> 组成。
+      </div>
+
+      <h2>目录</h2>
+      <ul class="toc">
+        <li><a href="#overview">总览图</a></li>
+        <li><a href="#layers">目录分层</a></li>
+        <li><a href="#startup">启动链路</a></li>
+        <li><a href="#tui">交互式 TUI</a></li>
+        <li><a href="#query-tools">对话与工具调用</a></li>
+        <li><a href="#tool-system">工具系统</a></li>
+        <li><a href="#commands">Slash Commands</a></li>
+        <li><a href="#mcp">MCP 接入</a></li>
+        <li><a href="#state">状态与持久化</a></li>
+        <li><a href="#remote">远程与多 Agent</a></li>
+        <li><a href="#route">阅读路线</a></li>
+      </ul>
+
+      <h2 id="overview">总览图</h2>
+      <div class="card diagram">
+        <pre class="mermaid">
+graph TB
+  User["用户 / 终端"] --> CLI["src/dev-entry.ts / src/main.tsx"]
+  CLI --> Modes{"启动模式"}
+  Modes --> TUI["交互式 TUI / React Ink"]
+  Modes --> PrintMode["Print / Headless / 一次性执行"]
+  Modes --> Server["Session Server / Remote / Bridge"]
+  Modes --> Admin["auth / mcp / plugin / doctor 等管理命令"]
+  TUI --> App["src/components/App.tsx / Context Providers"]
+  App --> REPL["src/components/REPL.tsx / 输入、消息、权限、状态"]
+  PrintMode --> Query["src/query.ts / 对话主循环"]
+  REPL --> Query
+  Server --> Query
+  Query --> API["src/services/api/claude.ts / Anthropic Messages Stream"]
+  Query --> ToolRuntime["src/services/tools / 工具编排与执行"]
+  ToolRuntime --> BuiltinTools["src/tools / Bash / Read / Edit / Agent / Web 等"]
+  ToolRuntime --> MCPRuntime["src/services/mcp / MCP Client / Config / Permissions"]
+  ToolRuntime --> Hooks["src/hooks/toolPermission / PreToolUse / 权限确认"]
+  API --> Model["Claude / Provider"]
+  MCPRuntime --> External["MCP Servers"]
+  BuiltinTools --> FS["文件系统 / Shell / Git / Web"]
+  Query --> Persistence["会话、配置、记忆、统计"]
+  Query --> Compact["src/services/compact / 上下文压缩"]
+  Query --> Analytics["src/services/analytics / GrowthBook / Telemetry"]
+        </pre>
+      </div>
+
+      <h2 id="layers">目录分层</h2>
+      <table>
+        <thead>
+          <tr><th>层级</th><th>主要目录 / 文件</th><th>职责</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>启动入口</td><td><code>src/dev-entry.ts</code>、<code>src/main.tsx</code>、<code>src/entrypoints/</code></td><td>本地开发入口、Commander CLI、不同运行模式分发</td></tr>
+          <tr><td>UI/TUI</td><td><code>src/components/</code>、<code>src/hooks/</code>、<code>src/ink.ts</code></td><td>React Ink 终端界面、输入框、消息列表、弹窗、状态栏、快捷键</td></tr>
+          <tr><td>对话循环</td><td><code>src/query.ts</code></td><td>调 Anthropic 流式 API、处理 assistant 消息、发现 tool_use、续跑多轮</td></tr>
+          <tr><td>工具抽象</td><td><code>src/Tool.ts</code>、<code>src/tools.ts</code>、<code>src/tools/</code></td><td>工具接口、内置工具注册、Bash/文件/Agent/Web/MCP 资源工具等</td></tr>
+          <tr><td>工具运行时</td><td><code>src/services/tools/</code></td><td>工具权限检查、hook、并发/流式执行、结果回填</td></tr>
+          <tr><td>命令系统</td><td><code>src/commands.ts</code>、<code>src/commands/</code></td><td>slash commands 聚合、动态技能命令、插件命令、内置管理命令</td></tr>
+          <tr><td>API 服务</td><td><code>src/services/api/</code></td><td>Anthropic SDK 请求、认证、重试、错误转换、用量/配额相关接口</td></tr>
+          <tr><td>MCP</td><td><code>src/services/mcp/</code>、<code>src/components/mcp/</code></td><td>MCP 配置读取、连接管理、工具注入、OAuth、权限 relay、UI 管理</td></tr>
+          <tr><td>状态与配置</td><td><code>src/bootstrap/state.ts</code>、<code>src/state/</code>、<code>src/utils/settings/</code></td><td>会话 ID、cwd、统计、settings、项目/用户配置</td></tr>
+          <tr><td>上下文管理</td><td><code>src/services/compact/</code>、<code>src/services/contextCollapse/</code></td><td>auto-compact、micro-compact、session memory、上下文预算</td></tr>
+          <tr><td>远程/多端</td><td><code>src/remote/</code>、<code>src/bridge/</code></td><td>远程会话、WebSocket/Bridge、远端权限与消息同步</td></tr>
+        </tbody>
+      </table>
+
+      <h2 id="startup">启动链路</h2>
+      <div class="card diagram">
+        <pre class="mermaid">
+sequenceDiagram
+  participant Shell as bun run dev / claude
+  participant Dev as src/dev-entry.ts
+  participant Init as src/entrypoints/init.ts
+  participant Main as src/main.tsx
+  participant Commander as commander
+  participant Runtime as TUI / Print / Server / Command
+  Shell->>Dev: 启动开发入口
+  Dev->>Dev: 注入宏、修补还原缺失导入、准备运行环境
+  Dev->>Main: 加载主 CLI
+  Main->>Init: 初始化配置、遥测、代理、认证前置项
+  Main->>Commander: 注册 options 和 subcommands
+  Commander->>Main: parseAsync(process.argv)
+  Main->>Runtime: 根据参数分发到对应运行模式
+        </pre>
+      </div>
+      <ul>
+        <li><code>bun run dev</code>：进入默认交互式 TUI。</li>
+        <li><code>bun run version</code>：走 <code>--version</code> 快速输出版本。</li>
+        <li><code>claude --print "..."</code>：跳过完整 TUI，用 headless 方式消费 <code>query()</code> 输出。</li>
+        <li><code>claude mcp</code>、<code>claude auth</code>、<code>claude plugin</code>：进入管理型子命令。</li>
+      </ul>
+
+      <h2 id="tui">交互式 TUI 结构</h2>
+      <div class="card diagram">
+        <pre class="mermaid">
+graph TB
+  Main["src/main.tsx launchRepl"] --> Render["renderAndRun / Ink render"]
+  Render --> App["App Providers"]
+  App --> REPL["REPL"]
+  REPL --> Input["PromptInput / TextInput"]
+  REPL --> Messages["Messages / Message / MessageResponse"]
+  REPL --> Dialogs["权限、设置、MCP、登录等 Dialog"]
+  REPL --> Hooks["useCommandQueue / useCanUseTool / useMergedTools"]
+  Input --> Commands["slash command 解析"]
+  Input --> QueryCall["提交用户消息"]
+  Commands --> LocalAction["本地命令执行"]
+  QueryCall --> Query["src/query.ts"]
+  Query --> Messages
+  Query --> ToolPermission["权限请求"]
+  ToolPermission --> Dialogs
+        </pre>
+      </div>
+      <p>
+        <code>src/components/App.tsx</code> 是顶层 Provider 壳；核心交互集中在
+        <code>src/components/REPL.tsx</code> 及大量 hook。
+      </p>
+
+      <h2 id="query-tools">对话与工具调用链路</h2>
+      <div class="card diagram">
+        <pre class="mermaid">
+sequenceDiagram
+  participant UI as REPL / Print
+  participant Query as src/query.ts
+  participant Claude as services/api/claude.ts
+  participant Tools as services/tools
+  participant Permission as useCanUseTool / hooks
+  participant Tool as built-in or MCP tool
+  UI->>Query: messages + systemPrompt + tools + context
+  Query->>Claude: stream request
+  Claude-->>Query: text_delta / tool_use / stop events
+  Query-->>UI: streaming text and assistant messages
+  alt 出现 tool_use
+    Query->>Tools: runTools / StreamingToolExecutor
+    Tools->>Permission: check canUseTool + PreToolUse hooks
+    Permission-->>Tools: allow / deny / ask user
+    Tools->>Tool: call input with context
+    Tool-->>Tools: result / progress / error
+    Tools-->>Query: tool_result user message
+    Query->>Claude: 带 tool_result 继续下一轮
+  else 无 tool_use
+    Query-->>UI: terminal result
+  end
+        </pre>
+      </div>
+      <ul>
+        <li><code>src/query.ts</code> 是 async generator，会持续 yield 流事件、消息和终止状态。</li>
+        <li>模型返回 <code>tool_use</code> 后，工具结果会作为新的 user message 回填，再继续下一轮。</li>
+        <li><code>src/services/compact/</code> 会在上下文过大或策略触发时压缩历史。</li>
+      </ul>
+
+      <h2 id="tool-system">工具系统</h2>
+      <div class="card diagram">
+        <pre class="mermaid">
+graph LR
+  PermissionContext["ToolPermissionContext"] --> GetTools["src/tools.ts getTools"]
+  Env["feature flags / env / USER_TYPE"] --> GetTools
+  GetTools --> Builtins["内置工具"]
+  MCPState["appState.mcp.tools"] --> Assemble["assembleToolPool"]
+  Builtins --> Assemble
+  PermissionContext --> Assemble
+  Assemble --> ToolPool["最终 tools"]
+  ToolPool --> API["暴露给模型"]
+  ToolPool --> Runtime["工具执行运行时"]
+  Builtins --> Bash["BashTool"]
+  Builtins --> File["FileRead / Edit / Write"]
+  Builtins --> Agent["Agent / Task tools"]
+  Builtins --> Web["WebFetch / WebSearch"]
+  Builtins --> Skill["SkillTool"]
+        </pre>
+      </div>
+      <p>
+        工具接口定义在 <code>src/Tool.ts</code>，内置工具实例分布在
+        <code>src/tools/*Tool/</code>。<code>src/tools.ts</code> 负责列出、过滤和合并最终工具池。
+      </p>
+
+      <h2 id="commands">Slash Commands 与插件/技能</h2>
+      <div class="card diagram">
+        <pre class="mermaid">
+graph TB
+  Registry["src/commands.ts getCommands"] --> Builtin["src/commands"]
+  Registry --> Skills["src/skills/loadSkillsDir.ts / 本地技能"]
+  Registry --> Bundled["src/skills/bundledSkills.ts / 内置技能"]
+  Registry --> Plugins["src/utils/plugins/loadPluginCommands.ts"]
+  Registry --> MCPSkills["MCP Skill Commands"]
+  Registry --> REPL["REPL slash command palette"]
+  REPL --> Local["local command: 执行 JS/TS 动作"]
+  REPL --> Prompt["prompt command: 生成 prompt"]
+  Prompt --> Query["src/query.ts"]
+        </pre>
+      </div>
+      <p>
+        命令可用性通常受编译期 <code>feature()</code>、运行时 <code>USER_TYPE</code> / 环境变量、GrowthBook 远程开关三层控制。
+      </p>
+
+      <h2 id="mcp">MCP 接入</h2>
+      <div class="card diagram">
+        <pre class="mermaid">
+graph TB
+  ConfigFiles["用户 / 项目 / 企业 MCP 配置"] --> McpConfig["src/services/mcp/config.ts"]
+  McpConfig --> Normalize["normalization / policy / disabled servers"]
+  Normalize --> Client["src/services/mcp/client.ts"]
+  Client --> Transport["stdio / sse / http / in-process"]
+  Transport --> Server["MCP Server"]
+  Server --> Tools["MCP tools / resources / prompts"]
+  Tools --> AppState["appState.mcp"]
+  AppState --> ToolPool["src/tools.ts assembleToolPool"]
+  ToolPool --> Query["src/query.ts"]
+        </pre>
+      </div>
+      <p>
+        MCP 配置管理在 <code>src/services/mcp/config.ts</code>，连接和 UI 管理在
+        <code>src/services/mcp/MCPConnectionManager.tsx</code> 与
+        <code>src/services/mcp/useManageMCPConnections.ts</code>。
+      </p>
+
+      <h2 id="state">状态、配置与持久化</h2>
+      <div class="card diagram">
+        <pre class="mermaid">
+graph LR
+  Settings["settings / env / policy"] --> Init["src/entrypoints/init.ts"]
+  Init --> Bootstrap["src/bootstrap/state.ts"]
+  Bootstrap --> Main["src/main.tsx"]
+  Main --> AppState["src/state/AppState.ts"]
+  AppState --> UI["src/components"]
+  AppState --> Query["src/query.ts"]
+  Query --> Logs["session logs / resume"]
+  Query --> Metrics["token / cost / duration"]
+  Query --> Memory["SessionMemory / compact"]
+        </pre>
+      </div>
+      <table>
+        <thead><tr><th>状态类型</th><th>位置</th><th>说明</th></tr></thead>
+        <tbody>
+          <tr><td>进程级运行状态</td><td><code>src/bootstrap/state.ts</code></td><td>sessionId、cwd、累计 token/cost/duration、turn 统计等</td></tr>
+          <tr><td>React AppState</td><td><code>src/state/AppState.ts</code></td><td>TUI 所需状态，如 MCP、模型、权限模式、消息相关状态</td></tr>
+          <tr><td>用户/项目 settings</td><td><code>src/utils/settings/</code></td><td>settings.json、环境变量、项目配置、配置来源</td></tr>
+          <tr><td>记忆与压缩</td><td><code>src/services/SessionMemory/</code>、<code>src/services/compact/</code></td><td>session memory、auto compact、上下文摘要</td></tr>
+          <tr><td>遥测与实验</td><td><code>src/services/analytics/</code></td><td>GrowthBook、DataDog、first-party event logging</td></tr>
+        </tbody>
+      </table>
+
+      <h2 id="remote">远程、Bridge 与多 Agent 能力</h2>
+      <div class="card diagram">
+        <pre class="mermaid">
+graph TB
+  LocalCLI["本地 CLI"] --> Query["src/query.ts"]
+  Web["claude.ai / mobile / remote client"] --> Bridge["src/bridge or src/remote"]
+  Bridge --> LocalCLI
+  Bridge --> Permission["远程权限确认"]
+  Bridge --> Messages["远程消息同步"]
+  Query --> AgentTool["AgentTool / Task tools"]
+  AgentTool --> Worker["子进程 / worker agent"]
+  Worker --> WorkerQuery["独立 query loop"]
+  WorkerQuery --> Results["task notification / tool results"]
+  Results --> Query
+        </pre>
+      </div>
+      <ul>
+        <li><code>docs/04-coordinator.md</code>：多 Agent 编排模式。</li>
+        <li><code>docs/06-bridge.md</code>：远程遥控终端与 Bridge。</li>
+        <li><code>src/remote/</code>：remote session 管理、WebSocket 和权限桥。</li>
+        <li><code>src/tools/AgentTool/</code>：子 Agent 的创建和运行。</li>
+      </ul>
+
+      <h2 id="route">新人阅读路线</h2>
+      <ol>
+        <li><code>package.json</code>：确认 Bun 脚本和依赖边界。</li>
+        <li><code>src/dev-entry.ts</code>：理解还原版本地启动适配。</li>
+        <li><code>src/main.tsx</code>：看 CLI 参数、模式分发和 <code>launchRepl</code>。</li>
+        <li><code>src/components/App.tsx</code>、<code>src/components/REPL.tsx</code>：看交互式 UI 如何组织。</li>
+        <li><code>src/query.ts</code>：重点理解模型请求、流式事件、tool_use 循环。</li>
+        <li><code>src/Tool.ts</code>、<code>src/tools.ts</code>、<code>src/services/tools/toolExecution.ts</code>：理解工具抽象和权限执行链路。</li>
+        <li><code>src/services/api/claude.ts</code>：理解最终发给 Anthropic API 的请求如何组装。</li>
+        <li><code>src/services/mcp/</code>：理解外部工具如何进入工具池。</li>
+        <li><code>docs/05-hidden-commands.md</code>、<code>docs/07-feature-gates.md</code>：理解为什么很多代码路径默认不可见。</li>
+      </ol>
+    </main>
+
+    <script type="module">
+      import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs';
+
+      mermaid.initialize({
+        startOnLoad: true,
+        securityLevel: 'loose',
+        theme: window.matchMedia('(prefers-color-scheme: dark)').matches
+          ? 'dark'
+          : 'default',
+        flowchart: {
+          htmlLabels: true,
+          curve: 'basis'
+        },
+        sequence: {
+          mirrorActors: false
+        }
+      });
+    </script>
+  </body>
+</html>
